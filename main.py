@@ -56,6 +56,111 @@ def predict_future(data, column, days=5):
     future_y = model.predict(future_X)  # 将来値の予測
     return future_y.flatten()
 
+# 三角持ち合いを検出する関数を修正
+def detect_triangle_pattern(data):
+    try:
+        # データの準備
+        target_data = data.copy()
+        highs = target_data['High'].values
+        lows = target_data['Low'].values
+        dates = target_data.index
+        
+        # 初期幅（H）の計算
+        initial_height = max(highs[:20]) - min(lows[:20])
+        
+        # ピーク検出のパラメータ
+        window = 5
+        min_points = 4
+        
+        # 高値と安値のピークを検出
+        high_peaks = []
+        low_peaks = []
+        high_dates = []
+        low_dates = []
+        
+        # 高値のピークを検出
+        for i in range(window, len(highs)-window):
+            if highs[i] == max(highs[i-window:i+window+1]):
+                if not high_peaks or (highs[i] < high_peaks[-1]):  # 下降トレンドの確認
+                    high_peaks.append(highs[i])
+                    high_dates.append(dates[i])
+        
+        # 安値のピークを検出
+        for i in range(window, len(lows)-window):
+            if lows[i] == min(lows[i-window:i+window+1]):
+                if not low_peaks or (lows[i] > low_peaks[-1]):  # 上昇トレンドの確認
+                    low_peaks.append(lows[i])
+                    low_dates.append(dates[i])
+        
+        if len(high_peaks) < min_points or len(low_peaks) < min_points:
+            return "データ不足", None, None, None, None, None
+        
+        # トレンドラインの計算
+        high_x = np.arange(len(high_peaks))
+        low_x = np.arange(len(low_peaks))
+        
+        # y = ax + b の係数を計算
+        high_coeffs = np.polyfit(high_x, high_peaks, 1)  # a2, b2
+        low_coeffs = np.polyfit(low_x, low_peaks, 1)    # a1, b1
+        
+        a1, b1 = low_coeffs   # 上昇トレンドライン
+        a2, b2 = high_coeffs  # 下降トレンドライン
+        
+        # 収束点の計算
+        if abs(a1 - a2) > 0.0001:  # ゼロ除算を防ぐ
+            x_c = (b2 - b1) / (a1 - a2)
+            y_c = a1 * x_c + b1
+            
+            # 収束点の日付を推定
+            days_to_convergence = int(x_c - len(high_x) + 1)
+            if days_to_convergence > 0:
+                convergence_date = dates[-1] + pd.Timedelta(days=days_to_convergence)
+            else:
+                convergence_date = dates[-1]
+        else:
+            convergence_date = dates[-1]
+            x_c = len(high_x)
+            y_c = a1 * x_c + b1
+        
+        # パターン判定
+        # 対称三角形: 上下のトレンドラインの傾きの絶対値がほぼ等しい
+        is_symmetrical = (abs(abs(a1) - abs(a2)) < 0.1 and a1 > 0 and a2 < 0)
+        
+        # 上昇三角形: 上のトレンドラインがほぼ水平で、下のトレンドラインが上昇
+        is_ascending = (abs(a2) < 0.05 and a1 > 0.05)
+        
+        # 下降三角形: 下のトレンドラインがほぼ水平で、上のトレンドラインが下降
+        is_descending = (abs(a1) < 0.05 and a2 < -0.05)
+        
+        # 目標価格の計算
+        target_prices = {
+            "上方ブレイク": y_c + initial_height,
+            "下方ブレイク": y_c - initial_height
+        }
+        
+        # パターンの種類を判定
+        pattern_info = {
+            "パターン": "パターンなし",
+            "収束予想日": convergence_date,
+            "目標価格": target_prices
+        }
+        
+        if is_symmetrical:
+            pattern_info["パターン"] = "対称三角形"
+            pattern_info["説明"] = "上下どちらのブレイクも同確率。ブレイク方向に大きな値動きの可能性。"
+        elif is_ascending:
+            pattern_info["パターン"] = "上昇三角形"
+            pattern_info["説明"] = "上方ブレイクの可能性が高く、強気相場の継続を示唆。"
+        elif is_descending:
+            pattern_info["パターン"] = "下降三角形"
+            pattern_info["説明"] = "下方ブレイクの可能性が高く、弱気相場の継続を示唆。"
+        
+        return pattern_info, high_coeffs, low_coeffs, high_dates, low_dates, target_prices
+        
+    except Exception as e:
+        print(f"Error in detect_triangle_pattern: {str(e)}")
+        return "パターンなし", None, None, None, None, None
+
 # Streamlit UIの構築
 st.title('📈 株価分析アプリ')  # アプリケーションのタイトル
 stock_name = st.text_input('🔍 銘柄 (例: AAPL)', value='AAPL')  # 銘柄入力フィールド
@@ -116,6 +221,53 @@ if st.button('📊 分析実行'):
     ax3.set_ylabel('MACD Value')  # Y軸ラベル
     ax3.grid(True)  # グリッド表示
     ax3.legend()  # 凡例表示
+    
+    # 三角持ち合いパターンの検出と描画
+    pattern_info, high_coeffs, low_coeffs, high_dates, low_dates, target_prices = detect_triangle_pattern(data)
+    
+    st.write('📐 三角持ち合いパターン分析:')
+    if isinstance(pattern_info, dict):
+        st.write(f'検出されたパターン: {pattern_info["パターン"]}')
+        
+        # パターンに応じた説明を表示
+        if pattern_info["パターン"] == "対称三角形":
+            st.write('説明: 上下どちらのブレイクも同確率。ブレイク方向に大きな値動きの可能性。')
+        elif pattern_info["パターン"] == "上昇三角形":
+            st.write('説明: 上方ブレイクの可能性が高く、強気相場の継続を示唆。')
+        elif pattern_info["パターン"] == "下降三角形":
+            st.write('説明: 下方ブレイクの可能性が高く、弱気相場の継続を示唆。')
+        
+        st.write(f'収束予想日: {pattern_info["収束予想日"].strftime("%Y-%m-%d")}')
+        
+        if target_prices:
+            st.write('予想目標価格:')
+            # numpy.float64をfloatに変換してからフォーマット
+            upper_target = float(target_prices["上方ブレイク"])
+            lower_target = float(target_prices["下方ブレイク"])
+            st.write(f'上方ブレイク時: {upper_target:.2f}')
+            st.write(f'下方ブレイク時: {lower_target:.2f}')
+    else:
+        st.write(f'検出されたパターン: {pattern_info}')
+    
+    # 三角持ち合いのプロット（パターンが検出された場合のみ）
+    if all(v is not None for v in [high_coeffs, low_coeffs, high_dates, low_dates]):
+        # 高値のトレンドライン
+        high_x = np.arange(len(high_dates))
+        high_trend = high_coeffs[0] * high_x + high_coeffs[1]
+        
+        # 安値のトレンドライン
+        low_x = np.arange(len(low_dates))
+        low_trend = low_coeffs[0] * low_x + low_coeffs[1]
+        
+        # トレンドラインをプロット（線を細く、透明度を調整）
+        ax1.plot(high_dates, high_trend, 'r--', label='Upper trend line', linewidth=1, alpha=0.7)
+        ax1.plot(low_dates, low_trend, 'g--', label='Lower trend line', linewidth=1, alpha=0.7)
+        
+        # ピークポイントをプロット
+        ax1.scatter(high_dates, high_trend, color='red', s=50)
+        ax1.scatter(low_dates, low_trend, color='green', s=50)
+        
+        ax1.legend()
     
     # グラフの表示
     st.pyplot(fig)
