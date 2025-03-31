@@ -8,12 +8,27 @@ from scipy.signal import find_peaks
 from scipy.interpolate import interp1d
 import talib as ta  # 追加
 import matplotlib.dates as mdates
+import matplotlib as mpl
+import matplotlib.font_manager as fm
+from PIL import Image
 
 # インポート文の後に追加
 import matplotlib.pyplot as plt
 plt.rcParams['font.family'] = 'MS Gothic'  # 日本語フォントの設定
 # または
 # plt.rcParams['font.family'] = 'IPAGothic'  # 別の日本語フォント
+
+# MacOS用の日本語フォント設定
+plt.rcParams['font.family'] = 'Hiragino Sans'  # MacOS標準の日本語フォント
+# または
+# plt.rcParams['font.family'] = 'AppleGothic'
+# または
+# plt.rcParams['font.family'] = '.HiraKakuInterface-W3'
+# または
+# plt.rcParams['font.family'] = '.AppleSystemUIFont'
+
+# グラフサイズと画像圧縮の警告を回避するための設定
+Image.MAX_IMAGE_PIXELS = None  # 画像サイズの制限を解除
 
 # ページ設定を最初に行う
 st.set_page_config(layout="wide")
@@ -196,33 +211,42 @@ def detect_triangle_pattern(data):
         lows = data['Low'].values
         dates = data.index
         
-        # より単純なピーク検出方法に変更
+        # デバッグ情報の表示
+        st.write("### 三角持ち合いパターン検出プロセス")
+        st.write(f"分析期間: {dates[0]} から {dates[-1]}")
+        st.write(f"データポイント数: {len(data)}")
+        
+        # ピーク検出のパラメータ
+        window = 5
+        
+        # 移動平均の計算
+        highs_smooth = pd.Series(highs).rolling(window=window).mean()
+        lows_smooth = pd.Series(lows).rolling(window=window).mean()
+        
+        # ピーク検出
         peaksH = []
         peaksL = []
         
-        # 3日間の移動平均を使用して、ノイズを減らす
-        highs_smooth = pd.Series(highs).rolling(window=3).mean()
-        lows_smooth = pd.Series(lows).rolling(window=3).mean()
-        
-        # 単純な方法でピークを検出
-        for i in range(1, len(data)-1):
-            # 高値のピーク：前後より高ければピークとする
-            if highs_smooth[i] > highs_smooth[i-1] and highs_smooth[i] > highs_smooth[i+1]:
+        for i in range(window, len(data)-window):
+            # 高値のピーク
+            if highs_smooth[i] == max(highs_smooth[i-window:i+window+1]):
                 peaksH.append(i)
             
-            # 安値のピーク：前後より低ければピークとする
-            if lows_smooth[i] < lows_smooth[i-1] and lows_smooth[i] < lows_smooth[i+1]:
+            # 安値のピーク
+            if lows_smooth[i] == min(lows_smooth[i-window:i+window+1]):
                 peaksL.append(i)
         
-        # 最低2つのピークがあれば分析を続行
+        # ピーク検出結果の表示
+        st.write("#### ピーク検出結果")
+        st.write(f"検出された高値ピーク数: {len(peaksH)}")
+        st.write(f"検出された安値ピーク数: {len(peaksL)}")
+        
+        # 最低2つのピークが必要
         if len(peaksH) < 2 or len(peaksL) < 2:
-            return "データ不足", None, None, None, None, None
+            st.warning("⚠️ 十分なピークポイントが見つかりませんでした")
+            return None, None, None, None, None, None
         
-        # 最新の10個のピークを使用
-        peaksH = peaksH[-30:]
-        peaksL = peaksL[-30:]
-        
-        # トレンドラインの計算を単純化
+        # トレンドライン計算
         high_x = np.array(peaksH)
         low_x = np.array(peaksL)
         high_y = highs[peaksH]
@@ -232,64 +256,74 @@ def detect_triangle_pattern(data):
         high_coeffs = np.polyfit(high_x, high_y, 1)
         low_coeffs = np.polyfit(low_x, low_y, 1)
         
-        a1, b1 = low_coeffs   # 下側のトレンドライン
-        a2, b2 = high_coeffs  # 上側のトレンドライン
+        a1, b1 = low_coeffs
+        a2, b2 = high_coeffs
         
-        # パターン判定の条件を大幅に緩和
-        is_symmetrical = abs(abs(a1) - abs(a2)) < 2.0  # かなり広い範囲で対称と判定
-        is_ascending = (abs(a2) < 1.0 and a1 > 0.0)    # ほぼ水平でもOK
-        is_descending = (abs(a1) < 1.0 and a2 < 0.0)   # ほぼ水平でもOK
+        # トレンドライン係数の表示
+        st.write("#### トレンドライン分析")
+        st.write("トレンドライン係数:")
+        st.write(f"上側トレンドライン: 傾き = {a2:.4f}, 切片 = {b2:.4f}")
+        st.write(f"下側トレンドライン: 傾き = {a1:.4f}, 切片 = {b1:.4f}")
         
-        # 収束点の計算を単純化
-        x_c = (b2 - b1) / (a1 - a2) if abs(a1 - a2) > 0.00001 else len(data)
-        y_c = a1 * x_c + b1
+        # パターン判定
+        is_symmetrical = abs(abs(a1) - abs(a2)) < 1.0
+        is_ascending = (abs(a2) < 0.5 and a1 > 0.05)
+        is_descending = (abs(a1) < 0.5 and a2 < -0.05)
         
-        # 収束までの日数計算
-        days_to_convergence = int(x_c - len(data) + 1)
+        # パターン判定結果の表示
+        st.write("#### パターン判定")
+        st.write(f"対称三角形条件: {is_symmetrical}")
+        st.write(f"上昇三角形条件: {is_ascending}")
+        st.write(f"下降三角形条件: {is_descending}")
         
-        # 収束期間の制限を緩和（180日まで）
-        if 0 < days_to_convergence < 180:
-            convergence_date = dates[-1] + pd.Timedelta(days=days_to_convergence)
-        else:
-            convergence_date = dates[-1] + pd.Timedelta(days=30)  # デフォルトで30日後に設定
+        # 収束点の計算
+        if abs(a1 - a2) > 0.00001:
+            x_c = (b2 - b1) / (a1 - a2)
+            y_c = a1 * x_c + b1
+            days_to_convergence = int(x_c - len(data) + 1)
+            
+            st.write("#### 収束点分析")
+            st.write(f"収束までの日数: {days_to_convergence}")
+            st.write(f"収束予想価格: {y_c:.2f}")
+            
+            if 3 <= days_to_convergence <= 90:
+                convergence_date = dates[-1] + pd.Timedelta(days=days_to_convergence)
+                price_range = np.max(highs) - np.min(lows)
+                
+                if is_symmetrical or is_ascending or is_descending:
+                    pattern_type = (
+                        "対称三角形" if is_symmetrical else
+                        "上昇三角形" if is_ascending else
+                        "下降三角形"
+                    )
+                    
+                    st.success(f"✅ {pattern_type}パターンを検出しました")
+                    
+                    pattern_info = {
+                        "パターン": pattern_type,
+                        "収束予想日": convergence_date,
+                        "目標価格": {
+                            "上方ブレイク": float(y_c + price_range * 0.2),
+                            "下方ブレイク": float(y_c - price_range * 0.2)
+                        },
+                        "説明": {
+                            "対称三角形": "上下どちらのブレイクも同確率",
+                            "上昇三角形": "上方ブレイクの可能性が高い",
+                            "下降三角形": "下方ブレイクの可能性が高い"
+                        }[pattern_type]
+                    }
+                    
+                    return pattern_info, high_coeffs, low_coeffs, dates[peaksH], dates[peaksL], {
+                        "上方ブレイク": float(y_c + price_range * 0.2),
+                        "下方ブレイク": float(y_c - price_range * 0.2)
+                    }
         
-        # 目標価格の計算を単純化
-        price_range = np.max(highs) - np.min(lows)
-        target_prices = {
-            "上方ブレイク": y_c + price_range * 0.3,  # より控えめな目標値
-            "下方ブレイク": y_c - price_range * 0.3
-        }
-        
-        # パターン情報の設定
-        # パターンの種類、収束予想日、目標価格を辞書形式で格納
-        pattern_info = {
-            "パターン": "パターンなし",
-            "収束予想日": convergence_date,
-            "目標価格": target_prices
-        }
-        
-        # パターンに応じた情報を設定
-        if is_symmetrical:
-            pattern_info["パターン"] = "対称三角形"
-            pattern_info["説明"] = "上下どちらのブレイクも同確率。ブレイク方向に大きな値動きの可能性。"
-        elif is_ascending:
-            pattern_info["パターン"] = "上昇三角形"
-            pattern_info["説明"] = "上方ブレイクの可能性が高く、強気相場の継続を示唆。"
-        elif is_descending:
-            pattern_info["パターン"] = "下降三角形"
-            pattern_info["説明"] = "下方ブレイクの可能性が高く、弱気相場の継続を示唆。"
-        
-        # ピーク日付の設定
-        high_dates = dates[peaksH]  # 高値のピーク日付
-        low_dates = dates[peaksL]   # 安値のピーク日付
-        
-        # 分析結果を返す
-        return pattern_info, high_coeffs, low_coeffs, high_dates, low_dates, target_prices
+        st.info("ℹ️ パターンの条件を満たしませんでした")
+        return None, None, None, None, None, None
         
     except Exception as e:
-        # エラー発生時はエラーメッセージを出力し、デフォルト値を返す
-        print(f"Error in detect_triangle_pattern: {str(e)}")
-        return "パターンなし", None, None, None, None, None
+        st.error(f"パターン検出中にエラーが発生しました: {str(e)}")
+        return None, None, None, None, None, None
 
 
 def detect_patterns(data):
@@ -389,16 +423,16 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
 
-    /* メトリックカード */
+    /* メトリックカード共通スタイル */
     .metric-card {
         background: white;
-        padding: 1rem;
+        padding: 1.4rem;
         border-radius: 8px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         border-left: 4px solid #17A2B8;
-        margin: 0.5rem 1rem;  /* 上下左右のマージンを追加 */
-        min-width: 130px;  /* 最小幅を少し広げる */
-        height: 85px;  /* 高さを固定 */
+        margin: 0.5rem 1rem;
+        min-width: 200px;
+        height: 120px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -406,20 +440,39 @@ st.markdown("""
 
     .metric-label {
         color: #6c757d;
-        font-size: 0.75rem;
+        font-size: 1rem;
         font-weight: 500;
-        text-transform: uppercase;
         letter-spacing: 0.5px;
-        margin-bottom: 0.3rem;  /* ラベルと値の間隔を調整 */
+        margin-bottom: 0.8rem;
     }
 
     .metric-value {
         color: #343a40;
-        font-size: 1.4rem;
+        font-size: 2.4rem;
         font-weight: 600;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        line-height: 1.2;
+    }
+
+    /* 前日比用のスタイル */
+    .price-change {
+        font-size: 1.2rem;  /* 前日比の数値 */
+        font-weight: 600;
+    }
+
+    .price-change-positive {
+        color: #28A745;
+    }
+
+    .price-change-negative {
+        color: #DC3545;
+    }
+
+    .price-change-percentage {
+        font-size: 1.8rem;  /* パーセンテージ表示 */
+        margin-left: 0.5rem;
     }
 
     /* インジケーター */
@@ -553,6 +606,10 @@ with main_col2:
                     latest_data = data.iloc[-1]
                     previous_data = data.iloc[-2]
                     
+                    # 最新の日付と値を表示
+                    latest_date = latest_data.name  # インデックスが日付
+                    current_price = latest_data['Close']
+                    
                     # メトリクスの更新
                     with metrics_placeholder:
                         metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
@@ -560,21 +617,25 @@ with main_col2:
                         with metrics_col1:
                             st.markdown(f"""
                             <div class="metric-card">
-                                <div class="metric-label">現在値</div>
-                                <div class="metric-value">${latest_data['Close']:.2f}</div>
+                                <div class="metric-label">現在値 ({latest_date.strftime('%Y/%m/%d')})</div>
+                                <div class="metric-value">¥{current_price:,.2f}</div>
                             </div>
                             """, unsafe_allow_html=True)
                         
                         # 前日比の計算と表示
-                        price_change = ((latest_data['Close'] - previous_data['Close']) / previous_data['Close']) * 100
-                        price_change_class = 'indicator-positive' if price_change >= 0 else 'indicator-negative'
-                        price_change_sign = '+' if price_change >= 0 else ''
+                        price_change = current_price - previous_data['Close']
+                        price_change_percent = (price_change / previous_data['Close']) * 100
+                        change_class = 'price-change-positive' if price_change >= 0 else 'price-change-negative'
+                        change_sign = '+' if price_change >= 0 else ''
                         
                         with metrics_col2:
                             st.markdown(f"""
                             <div class="metric-card">
                                 <div class="metric-label">前日比</div>
-                                <div class="metric-value {price_change_class}">{price_change_sign}{price_change:.2f}%</div>
+                                <div class="metric-value {change_class}">
+                                    {change_sign}${price_change:,.2f}
+                                    <span class="price-change-percentage">({change_sign}{price_change_percent:.2f}%)</span>
+                                </div>
                             </div>
                             """, unsafe_allow_html=True)
                         
@@ -585,7 +646,7 @@ with main_col2:
                         with metrics_col3:
                             st.markdown(f"""
                             <div class="metric-card">
-                                <div class="metric-label">Price</div>
+                                <div class="metric-label">出来高</div>
                                 <div class="metric-value">{volume_display}</div>
                             </div>
                             """, unsafe_allow_html=True)
@@ -601,6 +662,48 @@ with main_col2:
                             </div>
                             """, unsafe_allow_html=True)
 
+                # メインの分析セクションに追加（グラフの前に配置）
+                try:
+                    pattern_result = detect_triangle_pattern(data)
+                    
+                    if pattern_result[0] is not None:  # パターン情報が存在する場合
+                        pattern_info, high_coeffs, low_coeffs, high_dates, low_dates, target_prices = pattern_result
+                        
+                        # パターン検出結果を表示するコンテナを作成
+                        with st.container():
+                            # パターンが検出された場合
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.markdown(f"""
+                                <div style='
+                                    padding: 20px;
+                                    border-radius: 10px;
+                                    border: 2px solid #1E88E5;
+                                    background-color: rgba(30, 136, 229, 0.1);
+                                '>
+                                    <h4 style='color: #1E88E5; margin-top: 0;'>検出パターン: {pattern_info['パターン']}</h4>
+                                    <p><strong>特徴:</strong> {pattern_info['説明']}</p>
+                                    <p><strong>収束予想日:</strong> {pattern_info['収束予想日'].strftime('%Y/%m/%d')}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                            with col2:
+                                st.markdown(f"""
+                                <div style='
+                                    padding: 20px;
+                                    border-radius: 10px;
+                                    border: 2px solid #43A047;
+                                    background-color: rgba(67, 160, 71, 0.1);
+                                '>
+                                    <h4 style='color: #43A047; margin-top: 0;'>予想価格帯</h4>
+                                    <p><strong>上方ブレイク目標:</strong> ${target_prices['上方ブレイク']:.2f}</p>
+                                    <p><strong>下方ブレイク目標:</strong> ${target_prices['下方ブレイク']:.2f}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"パターン分析中にエラーが発生しました: {str(e)}")
+
                 # グラフの描画
                 with chart_placeholder:
                     try:
@@ -614,34 +717,117 @@ with main_col2:
                         n_plots = 1 + len(active_indicators)
                         
                         # フィギュアサイズを設定
-                        fig = plt.figure(figsize=(72, 24 + 12 * len(active_indicators)))
+                        fig = plt.figure(figsize=(24, 8 + 4 * len(active_indicators)))
                         
                         # グリッドのスペースを調整（余白を大きく）
                         spec = fig.add_gridspec(
                             n_plots, 
                             1, 
                             height_ratios=[3] + [1] * len(active_indicators),
-                            hspace=0.4,  # サブプロット間の縦方向の間隔
+                            hspace=0.3,  # サブプロット間の縦方向の間隔
                         )
                         
                         # 余白を設定
                         plt.subplots_adjust(
                             left=0.1,    # 左余白を10%に
-                            right=0.95,  # 右余白を5%に
+                            right=0.9,  # 右余白を5%に
                             top=0.95,    # 上余白を5%に
-                            bottom=0.1   # 下余白を10%に
+                            bottom=0.05   # 下余白を10%に
                         )
                         
                         # メインチャート（株価）
                         ax_main = fig.add_subplot(spec[0])
-                        ax_main.plot(data.index, data['Close'], label='StockPrice', color='black', alpha=0.8, linewidth=4)
-                        
-                        # タイトルの位置を調整（上方向に余白を追加）
-                        ax_main.set_title(f'{stock_name}', 
-                                         fontsize=72, 
-                                         pad=50,  # タイトルとグラフの間隔を増やす
-                                         y=1.02   # タイトルの縦位置を少し上に
-                        )
+
+                        # 基本の株価チャートを描画
+                        ax_main.plot(data.index, data['Close'], label='株価', color='black', alpha=0.8, linewidth=2)
+
+                        # ローソク足を追加
+                        ax_main.fill_between(data.index, data['Low'], data['High'], 
+                                             color='gray', alpha=0.2, label='価格範囲')
+
+                        # 三角持ち合いパターンの検出と描画
+                        if st.session_state.show_triangle:
+                            pattern_result = detect_triangle_pattern(data)
+                            if pattern_result[0] is not None:
+                                pattern_info, high_coeffs, low_coeffs, high_dates, low_dates, target_prices = pattern_result
+                                
+                                # トレンドラインの描画
+                                x_range = np.array(range(len(data)))
+                                
+                                # 高値のトレンドライン
+                                y_high = high_coeffs[0] * x_range + high_coeffs[1]
+                                ax_main.plot(data.index, y_high, '--', color='red', alpha=1.0, 
+                                            linewidth=3, label='上側トレンドライン（高値をつなぐ線）')
+                                
+                                # 安値のトレンドライン
+                                y_low = low_coeffs[0] * x_range + low_coeffs[1]
+                                ax_main.plot(data.index, y_low, '--', color='green', alpha=1.0, 
+                                            linewidth=3, label='下側トレンドライン（安値をつなぐ線）')
+                                
+                                # ピークポイントの表示
+                                if high_dates is not None and low_dates is not None:
+                                    ax_main.scatter(high_dates, data.loc[high_dates, 'High'], 
+                                                  color='red', alpha=1.0, s=200, 
+                                                  marker='^', label='高値ピーク')
+                                    ax_main.scatter(low_dates, data.loc[low_dates, 'Low'], 
+                                                  color='green', alpha=1.0, s=200, 
+                                                  marker='v', label='安値ピーク')
+
+                                # パターンの説明をグラフ上部に追加
+                                explanation_text = """
+                                三角持ち合いパターンの見方:
+                                ・赤の点線: 高値をつなぐトレンドライン
+                                ・緑の点線: 安値をつなぐトレンドライン
+                                ・赤の△: 高値ピーク
+                                ・緑の▼: 安値ピーク
+                                """
+                                
+                                # 説明テキストを左上に配置
+                                ax_main.text(0.02, 0.98, explanation_text,
+                                            transform=ax_main.transAxes,
+                                            verticalalignment='top',
+                                            horizontalalignment='left',
+                                            bbox=dict(boxstyle='round,pad=1',
+                                                     facecolor='white',
+                                                     alpha=0.9,
+                                                     edgecolor='gray',
+                                                     linewidth=2),
+                                            fontsize=12)
+
+                                # パターン情報のテキストボックスを右上に配置
+                                pattern_text = (
+                                    f"検出パターン: {pattern_info['パターン']}\n"
+                                    f"収束予想日: {pattern_info['収束予想日'].strftime('%Y/%m/%d')}\n"
+                                    f"上方目標: ${pattern_info['目標価格']['上方ブレイク']:.2f}\n"
+                                    f"下方目標: ${pattern_info['目標価格']['下方ブレイク']:.2f}\n"
+                                    f"特徴: {pattern_info['説明']}"
+                                )
+                                
+                                ax_main.text(0.98, 0.98, pattern_text,
+                                            transform=ax_main.transAxes,
+                                            verticalalignment='top',
+                                            horizontalalignment='right',
+                                            bbox=dict(boxstyle='round,pad=1',
+                                                     facecolor='white',
+                                                     alpha=0.9,
+                                                     edgecolor='blue',
+                                                     linewidth=2),
+                                            fontsize=12)
+
+                        # 凡例の設定を改善
+                        ax_main.legend(loc='upper left',
+                                      fontsize=12,
+                                      framealpha=0.8,
+                                      facecolor='white',
+                                      edgecolor='gray',
+                                      bbox_to_anchor=(0.02, 0.98),
+                                      ncol=1)
+
+                        # グリッドの設定
+                        ax_main.grid(True, alpha=0.3, linestyle='--')
+
+                        # Y軸のラベルを追加
+                        ax_main.set_ylabel('価格 ($)', fontsize=12)
                         
                         # 移動平均線の追加
                         if st.session_state.show_sma:
@@ -675,9 +861,9 @@ with main_col2:
                             ax_macd.plot(data.index, signal, label='Signal', color='red')
                             ax_macd.bar(data.index, hist, label='Histogram', color='gray', alpha=0.3)
                             ax_macd.grid(True, alpha=0.3)
-                            ax_macd.legend(loc='upper left', fontsize=48)  # 凡例を48ptに
-                            ax_macd.set_title('MACD', fontsize=56)  # タイトルを56ptに
-                            ax_macd.tick_params(axis='both', labelsize=48)  # 軸ラベルを48ptに
+                            ax_macd.legend(loc='upper left', fontsize=12)  # 凡例を12ptに
+                            ax_macd.set_title('MACD', fontsize=14)  # サブチャートタイトルを14ptに
+                            ax_macd.tick_params(axis='both', labelsize=12)  # 軸目盛りを12ptに
                             current_plot += 1
                         
                         # RSI
@@ -689,9 +875,9 @@ with main_col2:
                             ax_rsi.axhline(y=30, color='g', linestyle='--', alpha=0.3)
                             ax_rsi.set_ylim(0, 100)
                             ax_rsi.grid(True, alpha=0.3)
-                            ax_rsi.legend(loc='upper left', fontsize=48)  # 凡例を48ptに
-                            ax_rsi.set_title('RSI', fontsize=56)  # タイトルを56ptに
-                            ax_rsi.tick_params(axis='both', labelsize=48)  # 軸ラベルを48ptに
+                            ax_rsi.legend(loc='upper left', fontsize=12)  # 凡例を12ptに
+                            ax_rsi.set_title('RSI', fontsize=14)  # サブチャートタイトルを14ptに
+                            ax_rsi.tick_params(axis='both', labelsize=12)  # 軸目盛りを12ptに
                             current_plot += 1
                         
                         # ADX
@@ -707,23 +893,23 @@ with main_col2:
                             ax_adx.plot(data.index, plus_di, label='+DI', color='green')
                             ax_adx.plot(data.index, minus_di, label='-DI', color='red')
                             ax_adx.grid(True, alpha=0.3)
-                            ax_adx.legend(loc='upper left', fontsize=48)  # 凡例を48ptに
-                            ax_adx.set_title('ADX/DI', fontsize=56)  # タイトルを56ptに
-                            ax_adx.tick_params(axis='both', labelsize=48)  # 軸ラベルを48ptに
+                            ax_adx.legend(loc='upper left', fontsize=12)  # 凡例を12ptに
+                            ax_adx.set_title('ADX', fontsize=14)  # サブチャートタイトルを14ptに
+                            ax_adx.tick_params(axis='both', labelsize=12)  # 軸目盛りを12ptに
                         
                         # 全てのサブプロットに共通の設定
                         for ax in fig.axes:
                             ax.grid(True, alpha=0.3, linestyle='--', linewidth=3)  # グリッド線も太く
                             ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-                            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right', fontsize=48)  # 日付ラベルを48ptに
-                            ax.tick_params(axis='both', labelsize=48)  # 全ての軸ラベルを48ptに
+                            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right', fontsize=12)  # x軸の日付ラベルを12ptに
+                            ax.tick_params(axis='both', labelsize=12)  # 全ての軸ラベルを12ptに
                         
                         # Y軸のラベル間隔を調整（ラベルが重ならないように）
                         for ax in fig.axes:
                             ax.yaxis.set_major_locator(plt.MaxNLocator(6))  # Y軸の目盛り数を制限
                         
                         # レイアウトの自動調整の前に余白を確保
-                        plt.tight_layout(pad=3.0)  # 全体の余白を増やす
+                        fig.set_tight_layout(True)
                         
                         # グラフの表示
                         st.pyplot(fig)
@@ -896,6 +1082,24 @@ with st.sidebar:
                     key=f'{indicator.lower()}_period_slider'
                 )
 
+    # セッションステートに三角持ち合いの設定を追加
+    if 'show_triangle' not in st.session_state:
+        st.session_state.show_triangle = False
+
+    # サイドバーの設定部分に追加（既存のチェックボックス群の近くに配置）
+    st.markdown('<div class="sidebar-subheader">パターン検出</div>', unsafe_allow_html=True)
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.session_state.show_triangle = st.checkbox(
+            '三角持ち合い', 
+            value=st.session_state.show_triangle,
+            key='triangle_check'
+        )
+    with col2:
+        st.button('ℹ️', 
+                  help='三角持ち合いパターン（対称三角形、上昇三角形、下降三角形）を検出し、トレンドラインと収束点を表示します。',
+                  key='triangle_help')
+
 # StockPrice表示部分の修正
 if 'df' in st.session_state and not st.session_state.df.empty:
     metrics_placeholder = st.empty()
@@ -904,34 +1108,31 @@ if 'df' in st.session_state and not st.session_state.df.empty:
             latest_data = st.session_state.df.iloc[-1]
             prev_data = st.session_state.df.iloc[-2]
             
-            # 現在値
-            current_price = latest_data['Close']
-            
-            # 前日比の計算
-            price_change = current_price - prev_data['Close']
-            price_change_percent = (price_change / prev_data['Close']) * 100
-            
-            # 出来高
-            volume = latest_data['Volume']
-            
-            # RSIの計算（既に計算済みの場合）
-            rsi = latest_data.get('RSI', None)
+            # 最新の日付と値を取得
+            latest_date = latest_data.name
+            current_price = float(latest_data['Close'])  # 確実に数値に変換
             
             # メトリクスの表示
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.metric("現在値", f"¥{current_price:,.0f}")
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">現在値 ({latest_date.strftime('%Y/%m/%d')})</div>
+                    <div class="metric-value">${current_price:,.2f}</div>
+                </div>
+                """, unsafe_allow_html=True)
             
             with col2:
                 st.metric("前日比", 
-                         f"¥{price_change:,.0f} ({price_change_percent:.2f}%)",
-                         delta_color="normal" if price_change >= 0 else "inverse")
+                         f"¥{current_price - prev_data['Close']:,.0f} ({((current_price - prev_data['Close']) / prev_data['Close']) * 100:.2f}%)",
+                         delta_color="normal" if current_price >= prev_data['Close'] else "inverse")
             
             with col3:
-                st.metric("出来高", f"{volume:,.0f}")
+                st.metric("出来高", f"{latest_data['Volume']:,.0f}")
             
             with col4:
+                rsi = latest_data.get('RSI', None)
                 if rsi is not None:
                     st.metric("RSI", f"{rsi:.1f}")
                 
@@ -944,3 +1145,66 @@ if 'df' not in st.session_state:
 
 if 'stock_price_displayed' not in st.session_state:
     st.session_state.stock_price_displayed = False
+
+# グラフ描画部分の修正
+def plot_stock_chart():
+    try:
+        # アクティブなインジケーターのリストを作成
+        active_indicators = []
+        
+        # 移動平均線系
+        if st.session_state.show_sma:
+            sma = ta.SMA(data['Close'].values, timeperiod=st.session_state.sma_period)
+            ax_main.plot(data.index, sma, label=f'SMA({st.session_state.sma_period})', alpha=0.7)
+            
+        if st.session_state.show_ema:
+            ema = ta.EMA(data['Close'].values, timeperiod=st.session_state.ema_period)
+            ax_main.plot(data.index, ema, label=f'EMA({st.session_state.ema_period})', alpha=0.7)
+            
+        if st.session_state.show_dema:
+            dema = ta.DEMA(data['Close'].values, timeperiod=st.session_state.dema_period)
+            ax_main.plot(data.index, dema, label=f'DEMA({st.session_state.dema_period})', alpha=0.7)
+            
+        if st.session_state.show_wma:
+            wma = ta.WMA(data['Close'].values, timeperiod=st.session_state.wma_period)
+            ax_main.plot(data.index, wma, label=f'WMA({st.session_state.wma_period})', alpha=0.7)
+            
+        # モメンタム系とその他のインジケーター
+        if st.session_state.show_mom:
+            active_indicators.append('MOM')
+            
+        if st.session_state.show_cci:
+            active_indicators.append('CCI')
+            
+        if st.session_state.show_atr:
+            active_indicators.append('ATR')
+            
+        if st.session_state.show_stddev:
+            active_indicators.append('StdDev')
+            
+        if st.session_state.show_maxmin:
+            # 最大値・最小値の表示処理
+            pass
+
+        # グラフサイズを調整（小さくする）
+        fig, axes = plt.subplots(
+            nrows=len(active_indicators) + 1,
+            ncols=1,
+            figsize=(24, 8 + 4 * len(active_indicators)),  # サイズを調整
+            gridspec_kw={'height_ratios': [3] + [1] * len(active_indicators)}
+        )
+
+        # tight_layoutの代わりにsubplots_adjustを使用
+        plt.subplots_adjust(
+            left=0.1,
+            right=0.9,
+            top=0.95,
+            bottom=0.05,
+            hspace=0.3
+        )
+
+        # グラフを表示
+        st.pyplot(fig, clear_figure=True)
+
+    except Exception as e:
+        st.error(f"グラフの描画中にエラーが発生しました: {str(e)}")
