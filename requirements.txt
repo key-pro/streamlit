@@ -1,8 +1,12 @@
+streamlit==1.31.1
+pandas==2.2.0
+yfinance==0.2.36
+plotly==5.18.0
+requests==2.31.0
+beautifulsoup4==4.12.3
 numpy
-pandas
 matplotlib
-streamlit
-yfinance
 scikit-learn
-talib
 scipy
+mplfinance
+TA-Lib==0.4.28
