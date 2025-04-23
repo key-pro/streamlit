@@ -1,0 +1,7 @@
+opencv-python==4.9.0.80
+
+# インストールコマンド:
+# pip install -r requirements.txt
+
+# 実行コマンド:
+# python app.py 
