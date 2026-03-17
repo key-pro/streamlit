@@ -1560,8 +1560,15 @@ def render_detailed_analysis(available_pairs):
     with col1:
         if st.button("← 戻る", key="back_button"):
             # 戻るボタンが押された場合、selected_pairをNoneに設定してダッシュボードに戻る
-            # キャッシュは保持される（フィルタが変更されていないため）
+            # 詳細画面用のセッション状態をクリアし、サマリー（一覧）だけが表示されるようにする
             st.session_state.selected_pair = None
+            # 詳細画面で使っているウィジェットの状態をクリア（戻ったあと一覧だけ表示するため）
+            detail_keys = (
+                "sma20", "sma50", "ema20", "bb", "ichimoku", "dmi", "psar", "env",
+                "rsi", "macd", "stoch", "psych", "rci", "madev", "hv", "fib",
+            )
+            for key in detail_keys:
+                st.session_state.pop(key, None)
             st.rerun()
             return  # 戻るボタンが押された場合は処理を終了
 
@@ -1942,10 +1949,14 @@ def main():
     # ─ ページ切替 ─
     available_pairs = get_available_pairs()
 
-    if st.session_state.selected_pair is None:
-        render_dashboard(available_pairs)
-    else:
-        render_detailed_analysis(available_pairs)
+    # メインコンテンツを1つのコンテナにまとめ、詳細→一覧に戻ったときに
+    # 詳細のサマリーが残らないようにする
+    main_container = st.container()
+    with main_container:
+        if st.session_state.selected_pair is None:
+            render_dashboard(available_pairs)
+        else:
+            render_detailed_analysis(available_pairs)
 
 if __name__ == "__main__":
     main()
